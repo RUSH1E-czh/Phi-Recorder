@@ -12,136 +12,24 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Fix Dependencies & Permissions
+    - name: Fix Dependencies
       run: |
-        echo "修复 Cargo.toml..."
         sed -i 's/realfft = { version = "3.5.0", features = \["avx", "sse"\] }/realfft = "3.5.0"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-drag = "2.1.0"/# tauri-plugin-drag = "2.1.0"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-opener = "2"/# tauri-plugin-opener = "2"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-prevent-default = "2.0.0"/# tauri-plugin-prevent-default = "2.0.0"/' src-tauri/Cargo.toml
 
-        echo "清理 lib.rs 插件..."
-        sed -i '/\.plugin(tauri_plugin_drag::init())/d' src-tauri/src/lib.rs
-        sed -i '/\.plugin(tauri_plugin_opener::init())/d' src-tauri/src/lib.rs
-        sed -i '/use tauri_plugin_prevent_default::Flags;/d' src-tauri/src/lib.rs
-        sed -i '/#\[cfg(not(target_os = "android"))\]/d' src-tauri/src/lib.rs
-        perl -0777 -pi -e 's/\.plugin\(\s*tauri_plugin_prevent_default::Builder.*?\.build\(\)\s*\)//gs' src-tauri/src/lib.rs
-
-        echo "重写 migrated.json..."
-        cat << 'EOF' > src-tauri/capabilities/migrated.json
-        {
-          "identifier": "migrated",
-          "description": "permissions that were migrated from v1",
-          "local": true,
-          "windows": ["main"],
-          "permissions": [
-            "core:default",
-            "fs:default",
-            "fs:allow-read-file",
-            "fs:allow-write-file",
-            "fs:allow-read-dir",
-            "dialog:default",
-            "dialog:allow-open",
-            "dialog:allow-save",
-            "dialog:allow-message",
-            "shell:default",
-            "shell:allow-open",
-            "http:default",
-            "os:default",
-            { "identifier": "fs:scope", "allow": ["**"] }
-          ]
-        }
-        EOF
-
-    - name: Apply Memory & Performance Patches
-      run: |
-        cat << 'PYEOF' > patch.py
-        import re
-        with open('src-tauri/src/render.rs', 'r') as f: c = f.read()
-
-        # 1. 替换 find_ffmpeg (自动提取到私有 files 目录并赋权)
-        replacement = r'''
-        pub fn find_ffmpeg() -> Result<Option<String>> {
-            #[cfg(target_os = "android")]
-            {
-                let mut exe_dir = std::path::PathBuf::from("/data/user/0/com.hlmc.phi.recorder/files");
-                let _ = std::fs::create_dir_all(&exe_dir);
-                
-                let ffmpeg_dst = exe_dir.join("ffmpeg");
-                let lib_dst = exe_dir.join("libffmpeg.so");
-
-                if !ffmpeg_dst.exists() {
-                    if let Ok(current_exe) = std::env::current_exe() {
-                        if let Some(current_dir) = current_exe.parent() {
-                            let src_ffmpeg = current_dir.join("libffmpeg_bin.so");
-                            let src_lib = current_dir.join("libffmpeg.so");
-                            if src_ffmpeg.exists() {
-                                let _ = std::fs::copy(&src_ffmpeg, &ffmpeg_dst);
-                                let _ = std::fs::copy(&src_lib, &lib_dst);
-                                use std::os::unix::fs::PermissionsExt;
-                                if let Ok(mut p) = std::fs::metadata(&ffmpeg_dst).map(|m| m.permissions()) {
-                                    p.set_mode(0o755);
-                                    let _ = std::fs::set_permissions(&ffmpeg_dst, p);
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if ffmpeg_dst.exists() {
-                    std::env::set_var("LD_LIBRARY_PATH", exe_dir.display().to_string());
-                    return Ok(Some(ffmpeg_dst.to_string_lossy().into_owned()));
-                }
-            }
-
-            if let Some(ffmpeg_path) = read_config()?.ffmpeg_path {
-                if test_ffmpeg(&ffmpeg_path) { return Ok(Some(ffmpeg_path)); }
-            }
-            if test_ffmpeg("ffmpeg") { return Ok(Some("ffmpeg".to_owned())); }
-            let exe_dir = std::env::current_exe()?.parent().unwrap().to_owned();
-            let ffmpeg = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
-            let ffmpeg = exe_dir.join(ffmpeg);
-            Ok(if test_ffmpeg(&ffmpeg) { Some(ffmpeg.display().to_string()) } else { None })
-        }
-        '''
-        c = re.sub(r'pub fn find_ffmpeg\(\) -> Result<Option<String>> \{.*?\n\}', replacement.strip(), c, flags=re.DOTALL)
-
-        # 2. 修复 test_encoder 没有注入环境变量的 BUG
-        c = c.replace('let output = Command::new(ffmpeg)', 'let output = cmd_hidden(ffmpeg)')
-
-        # 3. 注入手机硬件加速编码器
-        c = c.replace('pub const ENCODER_LIST_HEVC: [&str; 4] = ["hevc_nvenc", ', 'pub const ENCODER_LIST_HEVC: [&str; 5] = ["hevc_mediacodec", "hevc_nvenc", ')
-        c = c.replace('pub const ENCODER_LIST_AVC: [&str; 4] = ["h264_nvenc", ', 'pub const ENCODER_LIST_AVC: [&str; 5] = ["h264_mediacodec", "h264_nvenc", ')
-
-        # 4. 将 render.rs 的 cmd_hidden 环境变量指向正确的私有目录
-        c = c.replace('let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();\n        cmd.env("LD_LIBRARY_PATH", exe_dir.display().to_string());', 'cmd.env("LD_LIBRARY_PATH", "/data/user/0/com.hlmc.phi.recorder/files");')
-
-        with open('src-tauri/src/render.rs', 'w') as f: f.write(c)
-
-        # 5. 将 lib.rs 的 cmd_hidden 环境变量也指向正确的私有目录
-        with open('src-tauri/src/lib.rs', 'r') as f: lib_c = f.read()
-        lib_c = lib_c.replace('let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();\n        cmd.env("LD_LIBRARY_PATH", exe_dir.display().to_string());', 'cmd.env("LD_LIBRARY_PATH", "/data/user/0/com.hlmc.phi.recorder/files");')
-        with open('src-tauri/src/lib.rs', 'w') as f: f.write(lib_c)
-        PYEOF
-
-        python3 patch.py
-        rm patch.py
-
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with: { node-version: 22 }
-      
     - name: Install pnpm
       run: npm install -g pnpm@11
-      
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with: { targets: aarch64-linux-android }
-      
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
       with: { workspaces: "src-tauri -> target" }
-      
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with: { distribution: 'temurin', java-version: '17' }
@@ -182,14 +70,6 @@ jobs:
     - name: Patch Manifest
       run: |
         sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
-
-    - name: Download and Inject FFmpeg
-      run: |
-        wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip
-        unzip -q ffmpeg.zip
-        mkdir -p src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a
-        cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/bin/ffmpeg src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg_bin.so
-        cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/libffmpeg.so src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
 
     - name: Build Android APK
       run: pnpm tauri android build --apk --target aarch64 -- --jobs 1
