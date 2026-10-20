@@ -12,13 +12,23 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 仅保留必要的依赖清理（以防旧版本残留）
     - name: Fix Dependencies
       run: |
         sed -i 's/realfft = { version = "3.5.0", features = \["avx", "sse"\] }/realfft = "3.5.0"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-drag = "2.1.0"/# tauri-plugin-drag = "2.1.0"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-opener = "2"/# tauri-plugin-opener = "2"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-prevent-default = "2.0.0"/# tauri-plugin-prevent-default = "2.0.0"/' src-tauri/Cargo.toml
+
+    # ==========================================
+    # 精准修复 os error 2 和 FFmpeg 不完整
+    # ==========================================
+    - name: Precision Fix for Lib.rs
+      run: |
+        # 1. 修复 check_ffmpeg_filter 里的环境变量问题（解决 FFmpeg 不完整）
+        sed -i 's/let output = Command::new(&ffmpeg)/let output = crate::cmd_hidden(\&ffmpeg)/' src-tauri/src/lib.rs
+
+        # 2. 拦截 post_render 里的路径转换（解决渲染时的 os error 2）
+        sed -i 's/async fn post_render(queue: State<'"'"'_'"'"', TaskQueue>, params: RenderParams) -> Result<(), InvokeError> {/async fn post_render(queue: State<'"'"'_'"'"', TaskQueue>, mut params: RenderParams) -> Result<(), InvokeError> {\n    params.path = fix_android_path(\&params.path);/' src-tauri/src/lib.rs
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
