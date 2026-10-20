@@ -66,23 +66,16 @@ jobs:
 
     - name: Patch Manifest
       run: |
-        MANIFEST="src-tauri/gen/android/app/src/main/AndroidManifest.xml"
-        sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <application|' $MANIFEST
+        sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
-- name: Download and Inject FFmpeg
-  run: |
-    # 直接下载整个源码包（云端内网极速下载）
-    wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip
-    unzip -q ffmpeg.zip
-    
-    # 创建目标目录
-    mkdir -p src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a
-    
-    # 把文件复制过去（请确保云端的解压目录名和内部路径是对的）
-    # 默认解压出来的文件夹叫 Android-FFmpeg-Prebuilt-main
-    cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/bin/ffmpeg src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg_bin.so
-    cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/libffmpeg.so src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
-    
+    - name: Download and Inject FFmpeg
+      run: |
+        wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip
+        unzip -q ffmpeg.zip
+        mkdir -p src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a
+        cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/bin/ffmpeg src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg_bin.so
+        cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/libffmpeg.so src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+
     - name: Build Android APK
       run: pnpm tauri android build --apk --target aarch64 -- --jobs 1
       
