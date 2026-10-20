@@ -337,6 +337,22 @@ async fn parse_chart(path: &Path) -> Result<ChartInfo, InvokeError> {
 }
 
 pub fn cmd_hidden(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let program_os = program.as_ref();
+    let program_str = program_os.to_string_lossy();
+
+    // 安卓端：如果是 APK 里的 .so，用系统 Linker 强行执行
+    #[cfg(target_os = "android")]
+    {
+        if program_str.contains(".so") || program_str.contains("/lib/") {
+            let mut cmd = tokio::process::Command::new("/system/bin/linker64");
+            cmd.arg(program_os);
+            if let Some(parent) = std::path::Path::new(program_os).parent() {
+                cmd.env("LD_LIBRARY_PATH", parent);
+            }
+            return cmd;
+        }
+    }
+
     let mut cmd = tokio::process::Command::new(program);
     #[cfg(target_os = "android")]
     {

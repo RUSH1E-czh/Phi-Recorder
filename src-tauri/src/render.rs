@@ -286,14 +286,32 @@ pub async fn build_player(config: &RenderConfig) -> Result<BasicPlayer> {
 }
 
 fn cmd_hidden(program: impl AsRef<OsStr>) -> Command {
+    let program_os = program.as_ref();
+    let program_str = program_os.to_string_lossy();
+
+    // 安卓端：如果是 APK 里的 .so，用系统 Linker 强行执行
+    #[cfg(target_os = "android")]
+    {
+        if program_str.contains(".so") || program_str.contains("/lib/") {
+            let mut cmd = Command::new("/system/bin/linker64");
+            cmd.arg(program_os); // 把 .so 路径作为参数传给 linker64
+            
+            // 告诉 Linker 去哪里找依赖库
+            if let Some(parent) = std::path::Path::new(program_os).parent() {
+                cmd.env("LD_LIBRARY_PATH", parent);
+            }
+            return cmd;
+        }
+    }
+
     let mut cmd = Command::new(program);
-    // 强行注入 App 的 lib 目录，确保能找到 libffmpeg.so
+    // 安卓端普通的命令（比如外部下载的），注入当前 lib 路径
     #[cfg(target_os = "android")]
     {
         let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();
         cmd.env("LD_LIBRARY_PATH", exe_dir.display().to_string());
     }
-    // 保留原版 Windows 逻辑
+    // Windows 保留原版
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -309,38 +327,19 @@ pub fn test_ffmpeg(path: impl AsRef<OsStr>) -> bool {
 pub fn find_ffmpeg() -> Result<Option<String>> {
     #[cfg(target_os = "android")]
     {
-        // 1. 直接去手机的 Download 文件夹找
-        let src_ffmpeg = std::path::Path::new("/storage/emulated/0/Download/ffmpeg");
-        let src_lib = std::path::Path::new("/storage/emulated/0/Download/libffmpeg.so");
-        
-        // 2. 找到后，必须偷偷复制到 App 内部私有目录（系统不允许直接运行 Download 里的程序）
-        let mut dst_dir = std::path::PathBuf::from("/data/user/0/com.hlmc.phi.recorder/files");
-        let _ = std::fs::create_dir_all(&dst_dir);
-        
-        let ffmpeg_dst = dst_dir.join("ffmpeg");
-        let lib_dst = dst_dir.join("libffmpeg.so");
-
-        if !ffmpeg_dst.exists() && src_ffmpeg.exists() {
-            let _ = std::fs::copy(src_ffmpeg, &ffmpeg_dst);
-            let _ = std::fs::copy(src_lib, &lib_dst);
-            // 赋予权限
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(mut p) = std::fs::metadata(&ffmpeg_dst).map(|m| m.permissions()) {
-                p.set_mode(0o755);
-                let _ = std::fs::set_permissions(&ffmpeg_dst, p);
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                // 直接指向 APK 的 lib 目录下的文件
+                let lib_ffmpeg = exe_dir.join("libffmpeg_bin.so");
+                if lib_ffmpeg.exists() {
+                    return Ok(Some(lib_ffmpeg.to_string_lossy().into_owned()));
+                }
             }
         }
-
-        if ffmpeg_dst.exists() {
-            // 强行指定动态库路径，解决“FFmpeg不完整”报错
-            std::env::set_var("LD_LIBRARY_PATH", dst_dir.display().to_string());
-            return Ok(Some(ffmpeg_dst.to_string_lossy().into_owned()));
-        }
-        
         return Ok(None);
     }
 
-    // 电脑端的代码保留原样即可
+    // 电脑端原版逻辑保留...
     if let Some(ffmpeg_path) = read_config()?.ffmpeg_path {
         if test_ffmpeg(&ffmpeg_path) { return Ok(Some(ffmpeg_path)); }
     }

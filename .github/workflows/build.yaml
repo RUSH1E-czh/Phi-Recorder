@@ -20,45 +20,36 @@ jobs:
         sed -i 's/^tauri-plugin-prevent-default = "2.0.0"/# tauri-plugin-prevent-default = "2.0.0"/' src-tauri/Cargo.toml
 
     # ==========================================
-    # 终极补丁：彻底修复环境变量和路径转换
+    # 注入 OOM 内存优化模块
     # ==========================================
-    - name: Apply Ultimate Fixes
+    - name: Apply OOM Optimizations
       run: |
         cat << 'PYEOF' > patch.py
         import re
 
-        # 修复 lib.rs
-        with open('src-tauri/src/lib.rs', 'r') as f: c = f.read()
-        
-        # 1. 拦截 post_render (解决点渲染时的 os error 2)
-        c = c.replace(
-            'async fn post_render(queue: State<\'_ , TaskQueue>, params: RenderParams) -> Result<(), InvokeError> {',
-            'async fn post_render(queue: State<\'_ , TaskQueue>, mut params: RenderParams) -> Result<(), InvokeError> {\n    params.path = fix_android_path(&params.path);'
-        )
-        
-        # 2. 修复 check_ffmpeg_filter (解决点渲染检查 FFmpeg 时的报错)
-        c = c.replace(
-            'let output = Command::new(&ffmpeg)',
-            'let output = crate::cmd_hidden(&ffmpeg)'
-        )
+        # 1. 注入 mimalloc
+        with open('src-tauri/Cargo.toml', 'r') as f: cargo = f.read()
+        if 'mimalloc' not in cargo:
+            cargo = cargo.replace('[dependencies]', '[dependencies]\nmimalloc = { version = "0.1", default-features = false }')
+        with open('src-tauri/Cargo.toml', 'w') as f: f.write(cargo)
 
+        with open('src-tauri/src/lib.rs', 'r') as f: c = f.read()
+        if 'static GLOBAL: mimalloc::MiMalloc' not in c:
+            c = c.replace('use anyhow::{bail, Context, Result};', '#[cfg(target_os = "android")]\n#[global_allocator]\nstatic GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;\n\nuse anyhow::{bail, Context, Result};')
         with open('src-tauri/src/lib.rs', 'w') as f: f.write(c)
 
-        # 修复 render.rs
+        # 2. 渲染管道与 FFmpeg 优化
         with open('src-tauri/src/render.rs', 'r') as f: c = f.read()
         
-        # 1. 修复 cmd_hidden 的路径（指向 files 而不是 lib）
-        c = c.replace(
-            'let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();\n        cmd.env("LD_LIBRARY_PATH", exe_dir.display().to_string());',
-            'cmd.env("LD_LIBRARY_PATH", "/data/user/0/com.hlmc.phi.recorder/files");'
-        )
-
-        # 2. 确保复制出来的 ffmpeg 文件有 755 权限，并且 .so 文件也复制过去
-        if 'let _ = std::fs::copy(src, &ffmpeg_dst);' in c:
-            c = c.replace(
-                'let _ = std::fs::copy(src, &ffmpeg_dst);',
-                'let _ = std::fs::copy(src, &ffmpeg_dst);\n                                use std::os::unix::fs::PermissionsExt;\n                                if let Ok(mut p) = std::fs::metadata(&ffmpeg_dst).map(|m| m.permissions()) { p.set_mode(0o755); let _ = std::fs::set_permissions(&ffmpeg_dst, p); }'
-            )
+        # 削减 PBO 队列，防显存爆炸
+        c = c.replace('const N: usize = 5;', 'const N: usize = 2;')
+        
+        # 减少 FFmpeg 探测，释放内存
+        c = c.replace('-probesize 50M', '-probesize 10M')
+        
+        # 开启硬件编码 (插在最前面)
+        c = c.replace('pub const ENCODER_LIST_HEVC: [&str; 4] = ["hevc_nvenc", ', 'pub const ENCODER_LIST_HEVC: [&str; 5] = ["hevc_mediacodec", "hevc_nvenc", ')
+        c = c.replace('pub const ENCODER_LIST_AVC: [&str; 4] = ["h264_nvenc", ', 'pub const ENCODER_LIST_AVC: [&str; 5] = ["h264_mediacodec", "h264_nvenc", ')
 
         with open('src-tauri/src/render.rs', 'w') as f: f.write(c)
         PYEOF
@@ -118,6 +109,9 @@ jobs:
       run: |
         sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
+    # ==========================================
+    # 下载 FFmpeg 塞进 lib 目录 (Linker64 方案)
+    # ==========================================
     - name: Download and Inject FFmpeg
       run: |
         wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip
