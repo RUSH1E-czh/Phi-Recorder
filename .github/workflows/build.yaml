@@ -20,15 +20,51 @@ jobs:
         sed -i 's/^tauri-plugin-prevent-default = "2.0.0"/# tauri-plugin-prevent-default = "2.0.0"/' src-tauri/Cargo.toml
 
     # ==========================================
-    # 精准修复 os error 2 和 FFmpeg 不完整
+    # 终极补丁：彻底修复环境变量和路径转换
     # ==========================================
-    - name: Precision Fix for Lib.rs
+    - name: Apply Ultimate Fixes
       run: |
-        # 1. 修复 check_ffmpeg_filter 里的环境变量问题（解决 FFmpeg 不完整）
-        sed -i 's/let output = Command::new(&ffmpeg)/let output = crate::cmd_hidden(\&ffmpeg)/' src-tauri/src/lib.rs
+        cat << 'PYEOF' > patch.py
+        import re
 
-        # 2. 拦截 post_render 里的路径转换（解决渲染时的 os error 2）
-        sed -i 's/async fn post_render(queue: State<'"'"'_'"'"', TaskQueue>, params: RenderParams) -> Result<(), InvokeError> {/async fn post_render(queue: State<'"'"'_'"'"', TaskQueue>, mut params: RenderParams) -> Result<(), InvokeError> {\n    params.path = fix_android_path(\&params.path);/' src-tauri/src/lib.rs
+        # 修复 lib.rs
+        with open('src-tauri/src/lib.rs', 'r') as f: c = f.read()
+        
+        # 1. 拦截 post_render (解决点渲染时的 os error 2)
+        c = c.replace(
+            'async fn post_render(queue: State<\'_ , TaskQueue>, params: RenderParams) -> Result<(), InvokeError> {',
+            'async fn post_render(queue: State<\'_ , TaskQueue>, mut params: RenderParams) -> Result<(), InvokeError> {\n    params.path = fix_android_path(&params.path);'
+        )
+        
+        # 2. 修复 check_ffmpeg_filter (解决点渲染检查 FFmpeg 时的报错)
+        c = c.replace(
+            'let output = Command::new(&ffmpeg)',
+            'let output = crate::cmd_hidden(&ffmpeg)'
+        )
+
+        with open('src-tauri/src/lib.rs', 'w') as f: f.write(c)
+
+        # 修复 render.rs
+        with open('src-tauri/src/render.rs', 'r') as f: c = f.read()
+        
+        # 1. 修复 cmd_hidden 的路径（指向 files 而不是 lib）
+        c = c.replace(
+            'let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();\n        cmd.env("LD_LIBRARY_PATH", exe_dir.display().to_string());',
+            'cmd.env("LD_LIBRARY_PATH", "/data/user/0/com.hlmc.phi.recorder/files");'
+        )
+
+        # 2. 确保复制出来的 ffmpeg 文件有 755 权限，并且 .so 文件也复制过去
+        if 'let _ = std::fs::copy(src, &ffmpeg_dst);' in c:
+            c = c.replace(
+                'let _ = std::fs::copy(src, &ffmpeg_dst);',
+                'let _ = std::fs::copy(src, &ffmpeg_dst);\n                                use std::os::unix::fs::PermissionsExt;\n                                if let Ok(mut p) = std::fs::metadata(&ffmpeg_dst).map(|m| m.permissions()) { p.set_mode(0o755); let _ = std::fs::set_permissions(&ffmpeg_dst, p); }'
+            )
+
+        with open('src-tauri/src/render.rs', 'w') as f: f.write(c)
+        PYEOF
+
+        python3 patch.py
+        rm patch.py
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
