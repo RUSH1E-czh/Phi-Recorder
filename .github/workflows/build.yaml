@@ -12,6 +12,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # 仅保留必要的依赖清理（以防旧版本残留）
     - name: Fix Dependencies
       run: |
         sed -i 's/realfft = { version = "3.5.0", features = \["avx", "sse"\] }/realfft = "3.5.0"/' src-tauri/Cargo.toml
@@ -70,6 +71,14 @@ jobs:
     - name: Patch Manifest
       run: |
         sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
+
+    - name: Download and Inject FFmpeg
+      run: |
+        wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip
+        unzip -q ffmpeg.zip
+        mkdir -p src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a
+        cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/bin/ffmpeg src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg_bin.so
+        cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/libffmpeg.so src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
 
     - name: Build Android APK
       run: pnpm tauri android build --apk --target aarch64 -- --jobs 1
