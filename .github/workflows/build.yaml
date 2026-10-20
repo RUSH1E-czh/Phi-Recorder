@@ -68,6 +68,30 @@ jobs:
       run: |
         sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
+    # ==========================================
+    # 独立内存优化模块 & 硬件加速模块（画质零损失）
+    # ==========================================
+    - name: Apply Memory & Performance Optimizations
+      run: |
+        echo "1. 注入 mimalloc 高性能内存分配器..."
+        # 向 Cargo.toml 添加 mimalloc 依赖
+        sed -i '/\[dependencies\]/a mimalloc = { version = "0.1", default-features = false }' src-tauri/Cargo.toml
+        # 在 lib.rs 中设置为全局分配器，专门对付长时间渲染的内存碎片
+        sed -i '1i #[cfg(target_os = "android")]\n#[global_allocator]\nstatic GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;\n' src-tauri/src/lib.rs
+        
+        echo "2. 开启手机的硬件编码器..."
+        sed -i 's/pub const ENCODER_LIST_HEVC: \[&str; 4\] = \["hevc_nvenc", /pub const ENCODER_LIST_HEVC: [\&str; 5] = ["hevc_mediacodec", "hevc_nvenc", /' src-tauri/src/render.rs
+        sed -i 's/pub const ENCODER_LIST_AVC: \[&str; 4\] = \["h264_nvenc", /pub const ENCODER_LIST_AVC: [\&str; 5] = ["h264_mediacodec", "h264_nvenc", /' src-tauri/src/render.rs
+
+        echo "3. 优化渲染管道，防止 OOM（不降画质）..."
+        # 将 PBO 缓冲从 5 降到 2，减少管道积压的数据量，不改变画质
+        sed -i 's/const N: usize = 5;/const N: usize = 2;/' src-tauri/src/render.rs
+        
+        echo "4. 优化 FFmpeg 内存占用..."
+        # 去掉无用的 50M 探测预读，限制 FFmpeg 线程数
+        sed -i 's/-probesize 50M/-probesize 5M/' src-tauri/src/render.rs
+        sed -i 's/"-loglevel", "warning"/"-loglevel", "warning", "-threads", "2"/' src-tauri/src/render.rs
+
     - name: Download and Inject FFmpeg
       run: |
         wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip
