@@ -307,40 +307,48 @@ pub fn test_ffmpeg(path: impl AsRef<OsStr>) -> bool {
 }
 
 pub fn find_ffmpeg() -> Result<Option<String>> {
-    // 安卓端优先直接去 lib 目录找打包进去的静态 ffmpeg
     #[cfg(target_os = "android")]
     {
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let lib_ffmpeg = exe_dir.join("libffmpeg_bin.so");
-                if lib_ffmpeg.exists() {
-                    return Ok(Some(lib_ffmpeg.to_string_lossy().into_owned()));
-                }
+        // 1. 直接去手机的 Download 文件夹找
+        let src_ffmpeg = std::path::Path::new("/storage/emulated/0/Download/ffmpeg");
+        let src_lib = std::path::Path::new("/storage/emulated/0/Download/libffmpeg.so");
+        
+        // 2. 找到后，必须偷偷复制到 App 内部私有目录（系统不允许直接运行 Download 里的程序）
+        let mut dst_dir = std::path::PathBuf::from("/data/user/0/com.hlmc.phi.recorder/files");
+        let _ = std::fs::create_dir_all(&dst_dir);
+        
+        let ffmpeg_dst = dst_dir.join("ffmpeg");
+        let lib_dst = dst_dir.join("libffmpeg.so");
+
+        if !ffmpeg_dst.exists() && src_ffmpeg.exists() {
+            let _ = std::fs::copy(src_ffmpeg, &ffmpeg_dst);
+            let _ = std::fs::copy(src_lib, &lib_dst);
+            // 赋予权限
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut p) = std::fs::metadata(&ffmpeg_dst).map(|m| m.permissions()) {
+                p.set_mode(0o755);
+                let _ = std::fs::set_permissions(&ffmpeg_dst, p);
             }
         }
+
+        if ffmpeg_dst.exists() {
+            // 强行指定动态库路径，解决“FFmpeg不完整”报错
+            std::env::set_var("LD_LIBRARY_PATH", dst_dir.display().to_string());
+            return Ok(Some(ffmpeg_dst.to_string_lossy().into_owned()));
+        }
+        
+        return Ok(None);
     }
 
-    // 下面是原版代码（PC端逻辑不变）
+    // 电脑端的代码保留原样即可
     if let Some(ffmpeg_path) = read_config()?.ffmpeg_path {
-        if test_ffmpeg(&ffmpeg_path) {
-            return Ok(Some(ffmpeg_path));
-        }
+        if test_ffmpeg(&ffmpeg_path) { return Ok(Some(ffmpeg_path)); }
     }
-    if test_ffmpeg("ffmpeg") {
-        return Ok(Some("ffmpeg".to_owned()));
-    }
+    if test_ffmpeg("ffmpeg") { return Ok(Some("ffmpeg".to_owned())); }
     let exe_dir = std::env::current_exe()?.parent().unwrap().to_owned();
-    let ffmpeg = if cfg!(target_os = "windows") {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
+    let ffmpeg = if cfg!(target_os = "windows") { "ffmpeg.exe" } else { "ffmpeg" };
     let ffmpeg = exe_dir.join(ffmpeg);
-    Ok(if test_ffmpeg(&ffmpeg) {
-        Some(ffmpeg.display().to_string())
-    } else {
-        None
-    })
+    Ok(if test_ffmpeg(&ffmpeg) { Some(ffmpeg.display().to_string()) } else { None })
 }
 
 pub const ENCODER_LIST_HEVC: [&str; 4] = ["hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_vaapi"];
