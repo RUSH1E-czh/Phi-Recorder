@@ -7,17 +7,24 @@
   ],
   "permissions": [
     "core:default",
+    "fs:default",
     "fs:allow-read-file",
     "fs:allow-write-file",
+    "fs:allow-read-dir",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "shell:default",
+    "shell:allow-open",
+    "http:default",
+    "os:default",
     {
       "identifier": "fs:scope",
       "allow": [
-        "$RESOURCE/*"
+        "**"
       ]
     },
-    "shell:allow-open",
-    "dialog:allow-open",
-    "dialog:allow-message",
     {
       "identifier": "http:default",
       "allow": [
@@ -26,34 +33,6 @@
         },
         {
           "url": "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
-        }
-      ]
-    },
-    "os:allow-platform",
-    "os:allow-version",
-    "os:allow-os-type",
-    "os:allow-family",
-    "os:allow-arch",
-    "os:allow-exe-extension",
-    "os:allow-locale",
-    "os:allow-hostname",
-    "dialog:default",
-    "shell:default",
-    "http:default",
-    "fs:default",
-    "os:default",
-    "core:window:default",
-    "core:window:allow-minimize",
-    "core:window:allow-close",
-    "core:window:allow-toggle-maximize",
-    "core:window:allow-internal-toggle-maximize",
-    "core:window:allow-start-dragging",
-    "core:window:allow-set-progress-bar"
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [
-        {
-          "path": "**"
         }
       ]
     }
