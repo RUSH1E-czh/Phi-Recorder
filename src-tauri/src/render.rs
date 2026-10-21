@@ -684,21 +684,8 @@ pub async fn generate_resource(is_cli: bool, generate_output: bool) -> Result<(B
 }
 
 pub async fn main(cmd: bool) -> Result<()> {
-    let loading_time = Instant::now(); // 👈 加上这一行
-    // ... 下面跟着我们之前改的同进程读取逻辑 ...
-    // ====== 同进程调用时，直接从环境变量或全局变量取数据 ======
-    let (mut fs, output_path, mut config, info) = if cmd {
-        generate_resource(true, true).await?
-    } else {
-        // 如果是安卓端同进程调用，我们不走 stdin，而是走我们后面在 task.rs 里设置的全局变量
-        let params = crate::ipc::get_render_params()?;
-        let output = crate::ipc::get_render_output()?;
-        let fs = fs::fs_from_file(&params.path)?;
-        (fs, output, params.config, params.info)
-    };
-    // ==========================================================
-    // ... 下面的代码（set_pc_assets_folder 等等）统统保持原样 ...md, true).await?;
-
+    let loading_time = Instant::now();
+    let (mut fs, output_path, mut config, info) = generate_resource(cmd, true).await?;
     set_pc_assets_folder(ASSET_PATH.get().unwrap().to_str().unwrap());
     let ipc = !cmd;
     let mut fonts = vec![FontArc::try_from_vec(load_file("font.ttf").await?)?];
