@@ -53,6 +53,7 @@ num-complex = "0.4.6"
 realfft = "3.5.0"
 rayon = "1.10.0"
 # sysinfo = "0.29.0"
+mimalloc = { version = "0.1", default-features = false }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

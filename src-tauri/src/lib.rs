@@ -10,6 +10,10 @@ mod render;
 mod task;
 mod icon;
 
+#[cfg(target_os = "android")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use anyhow::{bail, Context, Result};
 use common::{
     collect_chart_files, create_zip, ensure_dir, get_presets_json_file, get_presets_toml_file, get_rpe_dir, get_output_dir, respack_dir, save_presets, AppConfig, Extra, CONFIG_DIR, DATA_DIR
@@ -43,7 +47,7 @@ use icon::{BIG_ICON, ICON, SMALL_ICON};
 
 static ASSET_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-fn fix_android_path<T: AsRef<std::path::Path>>(p: T) -> std::path::PathBuf {
+pub fn fix_android_path<T: AsRef<std::path::Path>>(p: T) -> std::path::PathBuf {
     let path = p.as_ref();
     let s = path.to_string_lossy();
     if s.contains("content://com.android.externalstorage.documents") {
@@ -340,7 +344,6 @@ pub fn cmd_hidden(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let program_os = program.as_ref();
     let program_str = program_os.to_string_lossy();
 
-    // 安卓端：如果是 APK 里的 .so，用系统 Linker 强行执行
     #[cfg(target_os = "android")]
     {
         if program_str.contains(".so") || program_str.contains("/lib/") {
@@ -442,7 +445,8 @@ async fn preview_play(params: RenderParams) -> Result<(), InvokeError> {
 }
 
 #[tauri::command]
-async fn post_render(queue: State<'_, TaskQueue>, params: RenderParams) -> Result<(), InvokeError> {
+async fn post_render(queue: State<'_, TaskQueue>, mut params: RenderParams) -> Result<(), InvokeError> {
+    params.path = fix_android_path(&params.path); // 👈 关键！强行洗白路径
     wrap_async(async move {
         queue.post(params).await?;
         Ok(())
@@ -771,7 +775,12 @@ async fn check_ffmpeg_filter(ffmpeg: Option<String>) -> bool {
         return false;
     }
 
-    let output = cmd_hidden(&ffmpeg)
+    let mut cmd = Command::new(&ffmpeg);
+    if let Some(parent) = std::path::Path::new(&ffmpeg).parent() {
+        cmd.env("LD_LIBRARY_PATH", parent.to_string_lossy().to_string());
+    }
+
+    let output = cmd
         .arg("-filters")
         .output()
         .await
@@ -779,7 +788,6 @@ async fn check_ffmpeg_filter(ffmpeg: Option<String>) -> bool {
 
     let stderr = String::from_utf8(output.stderr).unwrap_or_default();
     if !stderr.contains("ffmpeg") {
-        error!("Missing ffmpeg");
         return false;
     }
 
@@ -788,11 +796,10 @@ async fn check_ffmpeg_filter(ffmpeg: Option<String>) -> bool {
     let mut complete = true;
     for i in filter_required {
         if !stdout.contains(i) {
-            error!("Missing lib: {}, Please check FFmpeg availability", i);
             complete = false;
         }
     }
-    return complete;
+    complete
 }
 
 #[tauri::command]

@@ -289,14 +289,11 @@ fn cmd_hidden(program: impl AsRef<OsStr>) -> Command {
     let program_os = program.as_ref();
     let program_str = program_os.to_string_lossy();
 
-    // 安卓端：如果是 APK 里的 .so，用系统 Linker 强行执行
     #[cfg(target_os = "android")]
     {
         if program_str.contains(".so") || program_str.contains("/lib/") {
             let mut cmd = Command::new("/system/bin/linker64");
-            cmd.arg(program_os); // 把 .so 路径作为参数传给 linker64
-            
-            // 告诉 Linker 去哪里找依赖库
+            cmd.arg(program_os);
             if let Some(parent) = std::path::Path::new(program_os).parent() {
                 cmd.env("LD_LIBRARY_PATH", parent);
             }
@@ -305,13 +302,12 @@ fn cmd_hidden(program: impl AsRef<OsStr>) -> Command {
     }
 
     let mut cmd = Command::new(program);
-    // 安卓端普通的命令（比如外部下载的），注入当前 lib 路径
     #[cfg(target_os = "android")]
     {
         let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();
         cmd.env("LD_LIBRARY_PATH", exe_dir.display().to_string());
     }
-    // Windows 保留原版
+    
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -329,7 +325,6 @@ pub fn find_ffmpeg() -> Result<Option<String>> {
     {
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
-                // 直接指向 APK 的 lib 目录下的文件
                 let lib_ffmpeg = exe_dir.join("libffmpeg_bin.so");
                 if lib_ffmpeg.exists() {
                     return Ok(Some(lib_ffmpeg.to_string_lossy().into_owned()));
@@ -339,7 +334,7 @@ pub fn find_ffmpeg() -> Result<Option<String>> {
         return Ok(None);
     }
 
-    // 电脑端原版逻辑保留...
+    // PC 端逻辑保留
     if let Some(ffmpeg_path) = read_config()?.ffmpeg_path {
         if test_ffmpeg(&ffmpeg_path) { return Ok(Some(ffmpeg_path)); }
     }
@@ -1261,7 +1256,7 @@ pub async fn main(cmd: bool) -> Result<()> {
     yuv_material.set_uniform("targetSize", [vw as i32, yuvh as i32]);
     yuv_material.set_uniform("uFlipY", 1i32);
 
-    const N: usize = 5; // Buffer Size
+    const N: usize = 2; // Buffer Size
     let mut pbos: [GLuint; N] = [0; N];
     unsafe {
         use miniquad::gl::*;
