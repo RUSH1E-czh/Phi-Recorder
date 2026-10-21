@@ -367,7 +367,7 @@ pub const ENCODER_LIST_AVC: [&str; 5] = ["h264_mediacodec", "h264_nvenc", "h264_
 pub fn get_encoder(
     ffmpeg: &String,
     config: &RenderConfig,
-    encoder_list: [&str; 4],
+    encoder_list: [&str; 5],
     use_global_config: bool,
 ) -> Option<String> {
     if let Some(custom_encoder) = &config.custom_encoder {
