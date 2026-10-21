@@ -238,31 +238,28 @@ impl Task {
         })
     }
 
-    pub async fn run(&self) -> Result<()> {
-        if self.request_cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(());
-        }
+pub async fn run(&self) -> Result<()> {
+    if self.request_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Ok(());
+    }
 
-        info!("Task #{} '{}' started ({})", self.id, self.name, self.params.path.display());
+    info!("Task #{} '{}' started ({})", self.id, self.name, self.params.path.display());
 
-        *self.status.lock().await = TaskStatus::Loading;
+    *self.status.lock().await = TaskStatus::Loading;
 
-        // === 安卓同进程执行 ===
+    // ==========================================
+    // 安卓端：同进程直接调用渲染，彻底废弃子进程
+    // ==========================================
     #[cfg(target_os = "android")]
     {
-        // 把参数塞进全局变量
         crate::ipc::set_render_params(self.params.clone(), self.output.clone());
-    
+        
         info!("Task #{} running in process...", self.id);
-        let status_arc = Arc::new(self.status.clone());
-        let cancel = Arc::new(self.request_cancel.load(Ordering::Relaxed));
-
-        // 直接在后台线程执行渲染
+        
         let res = tokio::task::spawn_blocking(move || {
-            // 用 tokio runtime 跑 async main
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(crate::render::main(false))
-        }).await.unwrap();
+        }).await?;
 
         match res {
             Ok(_) => {
@@ -284,17 +281,149 @@ impl Task {
         return Ok(());
     }
 
-    // === 电脑端保留原来的子进程逻辑 ===
+    // ==========================================
+    // 电脑端（Windows/Mac）：保留原本的子进程逻辑
+    // ==========================================
     #[cfg(not(target_os = "android"))]
     {
         let mut child = cmd_hidden(std::env::current_exe()?)
             .arg("render")
             .arg(ASSET_PATH.get().unwrap())
-             // ... (保留你原本的代码，直到最后一行) ...
-        }
-        Ok(())
-    }
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+
+        stdin
+            .write_all(format!("{}\n", serde_json::to_string(&self.params)?).as_bytes())
+            .await?;
+        stdin
+            .write_all(format!("{}\n", serde_json::to_string(&self.output)?).as_bytes())
+            .await?;
+        stdin.flush().await?;
+
+        let mut stdout_lines = BufReader::new(stdout).lines();
+        let mut stderr_lines = BufReader::new(stderr).lines();
+        let mut output_stderr = String::new();
+        let mut total_mixing: u64 = 0;
+        let mut total_frame: u64 = 0;
+        let start = Instant::now();
+        let mut frame_samples: VecDeque<(f64, u64)> = VecDeque::new();
+        let mut last_fps: u64 = 0;
+        let mut pause_written = false;
+        let mut total_pause_duration = Duration::ZERO;
+        let mut pause_start: Option<Instant> = None;
+
+        let config = read_config()?;
+
+        loop {
+            tokio::select! {
+                stderr_result = stderr_lines.next_line() => {
+                    let line = stderr_result?;
+                    let Some(line) = line else { break };
+                    if config.print_stderr {
+                        eprintln!("{}", line);
+                    }
+                    output_stderr.push_str(&line);
+                    output_stderr.push('\n');
+                },
+
+                stdout_result = stdout_lines.next_line() => {
+                    let line = stdout_result?;
+                    let Some(line) = line else { break };
+                    let Ok(event): Result<IPCEvent, _> = serde_json::from_str(line.trim()) else {
+                        continue;
+                    };
+
+                    match event {
+                        IPCEvent::Loading => {
+                            *self.status.lock().await = TaskStatus::Loading;
+                        },
+                        IPCEvent::Mixing => {
+                            *self.status.lock().await = TaskStatus::Mixing;
+                        },
+                        IPCEvent::MixingSfx(total) => {
+                            *self.status.lock().await = TaskStatus::MixingSfx {
+                                progress: 0.0,
+                            };
+                            total_mixing = total;
+                        },
+                        IPCEvent::Sfx(completed) => {
+                            *self.status.lock().await = TaskStatus::MixingSfx {
+                                progress: completed as f64 / total_mixing as f64,
+                            };
+                        },
+                        IPCEvent::RenderFrame(total) => {
+                            *self.status.lock().await = TaskStatus::Rendering {
+                                progress: 0.0,
+                                fps: 0,
+                                estimate: 0.0,
+                            };
+                            total_frame = total;
+                        },
+                        IPCEvent::Frame(completed) => {
+                            let cur = start.elapsed().as_secs_f64() - total_pause_duration.as_secs_f64() - pause_start.map_or(0.0, |s| s.elapsed().as_secs_f64());
+                            frame_samples.push_back((cur, completed));
+                            while frame_samples.len() > 2 && frame_samples.get(1).is_some_and(|(time, _)| cur - *time > 1.0) {
+                                frame_samples.pop_front();
+                            }
+                            if let Some(&(sample_time, sample_frame)) = frame_samples.front() {
+                                let elapsed = cur - sample_time;
+                                if elapsed > 0.0 {
+                                    last_fps = ((completed - sample_frame) as f64 / elapsed).round() as u64;
+                                }
+                            }
+                            let estimate = total_frame.saturating_sub(completed).max(1) as f64 / last_fps.max(1) as f64;
+                            *self.status.lock().await = TaskStatus::Rendering {
+                                progress: completed as f64 / total_frame as f64,
+                                fps: last_fps,
+                                estimate,
+                            };
+                        },
+                        IPCEvent::Paused => {
+                            let mut status = self.status.lock().await;
+                            if let TaskStatus::Rendering { progress, .. } = *status {
+                                *status = TaskStatus::Paused { progress };
+                            }
+                            pause_start = Some(Instant::now());
+                        },
+                        IPCEvent::Resumed => {
+                            if let Some(s) = pause_start.take() {
+                                total_pause_duration += s.elapsed();
+                            }
+                            frame_samples.clear();
+                            last_fps = 0;
+                            let mut status = self.status.lock().await;
+                            if let TaskStatus::Paused { progress } = *status {
+                                *status = TaskStatus::Rendering {
+                                    progress,
+                                    fps: 0,
+                                    estimate: 0.0,
+                                };
+                            }
+                        },
+                        IPCEvent::Done(duration) => {
+                            child.wait().await?;
+                            while let Some(line) = stderr_lines.next_line().await? {
+                                if config.print_stderr {
+                                    eprintln!("{}", line);
+                                }
+                                output_stderr.push_str(&line);
+                                output_stderr.push('\n');
+                            }
+                            info!("Task #{} completed in {}", self.id, format_duration(Duration::from_secs_f64(duration)));
+
+                            *self.status.lock().await = TaskStatus::Done {
+                                duration,
+                                output: output_stderr,
+                            };
+                            return Ok(());
                         }
+                    }
+                },
 
                 _ = async {
                     loop {
@@ -344,6 +473,7 @@ impl Task {
 
         Ok(())
     }
+}
 
     pub fn cancel(&self) {
         self.request_cancel.store(true, Ordering::Relaxed);
