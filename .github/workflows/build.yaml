@@ -12,50 +12,13 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # 仅做基础清理，防止旧依赖报错（如果本地已删，这步会自动跳过）
     - name: Fix Dependencies
       run: |
         sed -i 's/realfft = { version = "3.5.0", features = \["avx", "sse"\] }/realfft = "3.5.0"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-drag = "2.1.0"/# tauri-plugin-drag = "2.1.0"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-opener = "2"/# tauri-plugin-opener = "2"/' src-tauri/Cargo.toml
         sed -i 's/^tauri-plugin-prevent-default = "2.0.0"/# tauri-plugin-prevent-default = "2.0.0"/' src-tauri/Cargo.toml
-
-    # ==========================================
-    # 注入 OOM 内存优化模块
-    # ==========================================
-    - name: Apply OOM Optimizations
-      run: |
-        cat << 'PYEOF' > patch.py
-        import re
-
-        # 1. 注入 mimalloc
-        with open('src-tauri/Cargo.toml', 'r') as f: cargo = f.read()
-        if 'mimalloc' not in cargo:
-            cargo = cargo.replace('[dependencies]', '[dependencies]\nmimalloc = { version = "0.1", default-features = false }')
-        with open('src-tauri/Cargo.toml', 'w') as f: f.write(cargo)
-
-        with open('src-tauri/src/lib.rs', 'r') as f: c = f.read()
-        if 'static GLOBAL: mimalloc::MiMalloc' not in c:
-            c = c.replace('use anyhow::{bail, Context, Result};', '#[cfg(target_os = "android")]\n#[global_allocator]\nstatic GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;\n\nuse anyhow::{bail, Context, Result};')
-        with open('src-tauri/src/lib.rs', 'w') as f: f.write(c)
-
-        # 2. 渲染管道与 FFmpeg 优化
-        with open('src-tauri/src/render.rs', 'r') as f: c = f.read()
-        
-        # 削减 PBO 队列，防显存爆炸
-        c = c.replace('const N: usize = 5;', 'const N: usize = 2;')
-        
-        # 减少 FFmpeg 探测，释放内存
-        c = c.replace('-probesize 50M', '-probesize 10M')
-        
-        # 开启硬件编码 (插在最前面)
-        c = c.replace('pub const ENCODER_LIST_HEVC: [&str; 4] = ["hevc_nvenc", ', 'pub const ENCODER_LIST_HEVC: [&str; 5] = ["hevc_mediacodec", "hevc_nvenc", ')
-        c = c.replace('pub const ENCODER_LIST_AVC: [&str; 4] = ["h264_nvenc", ', 'pub const ENCODER_LIST_AVC: [&str; 5] = ["h264_mediacodec", "h264_nvenc", ')
-
-        with open('src-tauri/src/render.rs', 'w') as f: f.write(c)
-        PYEOF
-
-        python3 patch.py
-        rm patch.py
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -109,9 +72,7 @@ jobs:
       run: |
         sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
-    # ==========================================
-    # 下载 FFmpeg 塞进 lib 目录 (Linker64 方案)
-    # ==========================================
+    # 下载 FFmpeg 塞进 lib 目录，配合你本地改好的 Linker64 方案
     - name: Download and Inject FFmpeg
       run: |
         wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip
