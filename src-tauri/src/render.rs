@@ -257,7 +257,7 @@ impl Default for RenderConfig {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)] // 👈 这里加上 Clone
 #[serde(rename_all = "camelCase")]
 pub struct RenderParams {
     pub path: PathBuf,
@@ -684,6 +684,8 @@ pub async fn generate_resource(is_cli: bool, generate_output: bool) -> Result<(B
 }
 
 pub async fn main(cmd: bool) -> Result<()> {
+    let loading_time = Instant::now(); // 👈 加上这一行
+    // ... 下面跟着我们之前改的同进程读取逻辑 ...
     // ====== 同进程调用时，直接从环境变量或全局变量取数据 ======
     let (mut fs, output_path, mut config, info) = if cmd {
         generate_resource(true, true).await?
