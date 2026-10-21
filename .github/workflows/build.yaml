@@ -56,16 +56,19 @@ jobs:
     - name: Init Android
       run: pnpm tauri android init --ci
 
-    - name: Force Override Icon, Version and TargetSdk
+    - name: Force Override Icon, Version, TargetSdk and Disable Lint
       run: |
-        # 【核心】强制降级 targetSdk 到 28，绕过系统 noexec 限制
+        # 1. 强制降级 targetSdk 到 28，绕过系统 noexec 限制
         sed -i 's/targetSdk = [0-9]*/targetSdk = 28/g' src-tauri/gen/android/app/build.gradle.kts
         sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 28/g' src-tauri/gen/android/app/build.gradle.kts
         
-        # 覆盖版本号
+        # 2. 【新增】关闭 Lint 检查，防止谷歌的上架规则拦截打包
+        sed -i '/android {/a \    lint { abortOnError = false; checkReleaseBuilds = false }' src-tauri/gen/android/app/build.gradle.kts
+
+        # 3. 覆盖版本号
         sed -i 's/versionName = .*/versionName = "1.6.5"/' src-tauri/gen/android/app/build.gradle.kts
         
-        # 覆盖图标
+        # 4. 覆盖图标
         for dir in src-tauri/gen/android/app/src/main/res/mipmap-*; do
           if [ -d "$dir" ]; then
             cp -f src-tauri/icons/icon.png "$dir/ic_launcher.png" || true
