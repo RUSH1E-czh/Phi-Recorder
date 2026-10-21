@@ -12,6 +12,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # 1. 清理不兼容的插件依赖
     - name: Fix Dependencies
       run: |
         sed -i 's/realfft = { version = "3.5.0", features = \["avx", "sse"\] }/realfft = "3.5.0"/' src-tauri/Cargo.toml
@@ -56,19 +57,20 @@ jobs:
     - name: Init Android
       run: pnpm tauri android init --ci
 
+    # 2. 强行降级 API 28，关闭 Lint，覆盖图标和版本号
     - name: Force Override Icon, Version, TargetSdk and Disable Lint
       run: |
-        # 1. 强制降级 targetSdk 到 28，绕过系统 noexec 限制
+        # 强制降级 targetSdk 到 28，绕过系统对 executable 的限制
         sed -i 's/targetSdk = [0-9]*/targetSdk = 28/g' src-tauri/gen/android/app/build.gradle.kts
         sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 28/g' src-tauri/gen/android/app/build.gradle.kts
         
-        # 2. 【新增】关闭 Lint 检查，防止谷歌的上架规则拦截打包
+        # 强行关闭 Lint 检查（防止 ExpiredTargetSdkVersion 导致打包失败）
         sed -i '/android {/a \    lint { abortOnError = false; checkReleaseBuilds = false }' src-tauri/gen/android/app/build.gradle.kts
 
-        # 3. 覆盖版本号
+        # 覆盖版本号 1.6.5
         sed -i 's/versionName = .*/versionName = "1.6.5"/' src-tauri/gen/android/app/build.gradle.kts
         
-        # 4. 覆盖图标
+        # 覆盖图标
         for dir in src-tauri/gen/android/app/src/main/res/mipmap-*; do
           if [ -d "$dir" ]; then
             cp -f src-tauri/icons/icon.png "$dir/ic_launcher.png" || true
@@ -77,10 +79,12 @@ jobs:
           fi
         done
 
+    # 3. 注入存储权限
     - name: Patch Manifest
       run: |
         sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
+    # 4. 下载并注入 FFmpeg 到 lib 目录
     - name: Download and Inject FFmpeg
       run: |
         wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip
@@ -89,6 +93,7 @@ jobs:
         cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/bin/ffmpeg src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg_bin.so
         cp Android-FFmpeg-Prebuilt-main/ffmpeg-9.0/libffmpeg.so src-tauri/gen/android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
 
+    # 5. 打包
     - name: Build Android APK
       run: pnpm tauri android build --apk --target aarch64 -- --jobs 1
       
