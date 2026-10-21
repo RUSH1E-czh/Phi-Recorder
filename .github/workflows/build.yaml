@@ -12,7 +12,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 仅做基础清理，防止旧依赖报错（如果本地已删，这步会自动跳过）
     - name: Fix Dependencies
       run: |
         sed -i 's/realfft = { version = "3.5.0", features = \["avx", "sse"\] }/realfft = "3.5.0"/' src-tauri/Cargo.toml
@@ -57,9 +56,16 @@ jobs:
     - name: Init Android
       run: pnpm tauri android init --ci
 
-    - name: Force Override Icon and Version
+    - name: Force Override Icon, Version and TargetSdk
       run: |
+        # 【核心】强制降级 targetSdk 到 28，绕过系统 noexec 限制
+        sed -i 's/targetSdk = [0-9]*/targetSdk = 28/g' src-tauri/gen/android/app/build.gradle.kts
+        sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 28/g' src-tauri/gen/android/app/build.gradle.kts
+        
+        # 覆盖版本号
         sed -i 's/versionName = .*/versionName = "1.6.5"/' src-tauri/gen/android/app/build.gradle.kts
+        
+        # 覆盖图标
         for dir in src-tauri/gen/android/app/src/main/res/mipmap-*; do
           if [ -d "$dir" ]; then
             cp -f src-tauri/icons/icon.png "$dir/ic_launcher.png" || true
@@ -72,7 +78,6 @@ jobs:
       run: |
         sed -i 's|<application|<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    <application|' src-tauri/gen/android/app/src/main/AndroidManifest.xml
 
-    # 下载 FFmpeg 塞进 lib 目录，配合你本地改好的 Linker64 方案
     - name: Download and Inject FFmpeg
       run: |
         wget -q https://github.com/hzw1199/Android-FFmpeg-Prebuilt/archive/refs/heads/main.zip -O ffmpeg.zip

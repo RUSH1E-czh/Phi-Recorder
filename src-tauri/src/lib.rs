@@ -341,26 +341,10 @@ async fn parse_chart(path: &Path) -> Result<ChartInfo, InvokeError> {
 }
 
 pub fn cmd_hidden(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let program_os = program.as_ref();
-    let program_str = program_os.to_string_lossy();
-
-    #[cfg(target_os = "android")]
-    {
-        if program_str.contains(".so") || program_str.contains("/lib/") {
-            let mut cmd = tokio::process::Command::new("/system/bin/linker64");
-            cmd.arg(program_os);
-            if let Some(parent) = std::path::Path::new(program_os).parent() {
-                cmd.env("LD_LIBRARY_PATH", parent);
-            }
-            return cmd;
-        }
-    }
-
     let mut cmd = tokio::process::Command::new(program);
     #[cfg(target_os = "android")]
     {
-        let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();
-        cmd.env("LD_LIBRARY_PATH", exe_dir.display().to_string());
+        cmd.env("LD_LIBRARY_PATH", "/data/user/0/com.hlmc.phi.recorder/files");
     }
     cmd
 }
@@ -446,7 +430,7 @@ async fn preview_play(params: RenderParams) -> Result<(), InvokeError> {
 
 #[tauri::command]
 async fn post_render(queue: State<'_, TaskQueue>, mut params: RenderParams) -> Result<(), InvokeError> {
-    params.path = fix_android_path(&params.path); // 👈 关键！强行洗白路径
+    params.path = fix_android_path(&params.path); // 强行洗白路径
     wrap_async(async move {
         queue.post(params).await?;
         Ok(())

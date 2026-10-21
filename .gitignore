@@ -33,6 +33,3 @@ coverage
 /.cargo
 
 target/
-src-tauri/gen/
-ffmpeg-9.0/
-ffmpeg-9.0/

@@ -286,28 +286,11 @@ pub async fn build_player(config: &RenderConfig) -> Result<BasicPlayer> {
 }
 
 fn cmd_hidden(program: impl AsRef<OsStr>) -> Command {
-    let program_os = program.as_ref();
-    let program_str = program_os.to_string_lossy();
-
-    #[cfg(target_os = "android")]
-    {
-        if program_str.contains(".so") || program_str.contains("/lib/") {
-            let mut cmd = Command::new("/system/bin/linker64");
-            cmd.arg(program_os);
-            if let Some(parent) = std::path::Path::new(program_os).parent() {
-                cmd.env("LD_LIBRARY_PATH", parent);
-            }
-            return cmd;
-        }
-    }
-
     let mut cmd = Command::new(program);
     #[cfg(target_os = "android")]
     {
-        let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_owned();
-        cmd.env("LD_LIBRARY_PATH", exe_dir.display().to_string());
+        cmd.env("LD_LIBRARY_PATH", "/data/user/0/com.hlmc.phi.recorder/files");
     }
-    
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -323,18 +306,51 @@ pub fn test_ffmpeg(path: impl AsRef<OsStr>) -> bool {
 pub fn find_ffmpeg() -> Result<Option<String>> {
     #[cfg(target_os = "android")]
     {
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(exe_dir) = exe_path.parent() {
-                let lib_ffmpeg = exe_dir.join("libffmpeg_bin.so");
-                if lib_ffmpeg.exists() {
-                    return Ok(Some(lib_ffmpeg.to_string_lossy().into_owned()));
+        let mut dst_dir = std::path::PathBuf::from("/data/user/0/com.hlmc.phi.recorder/files");
+        let _ = std::fs::create_dir_all(&dst_dir);
+        let ffmpeg_dst = dst_dir.join("ffmpeg");
+        let lib_dst = dst_dir.join("libffmpeg.so");
+
+        if !ffmpeg_dst.exists() {
+            let mut copied = false;
+            // 1. 从 APK 底层提取
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    let src_ffmpeg = exe_dir.join("libffmpeg_bin.so");
+                    let src_lib = exe_dir.join("libffmpeg.so");
+                    if src_ffmpeg.exists() {
+                        let _ = std::fs::copy(&src_ffmpeg, &ffmpeg_dst);
+                        let _ = std::fs::copy(&src_lib, &lib_dst);
+                        copied = true;
+                    }
                 }
             }
+            // 2. Download 目录兜底
+            if !copied {
+                let dl_ffmpeg = std::path::Path::new("/storage/emulated/0/Download/ffmpeg");
+                let dl_lib = std::path::Path::new("/storage/emulated/0/Download/libffmpeg.so");
+                if dl_ffmpeg.exists() {
+                    let _ = std::fs::copy(dl_ffmpeg, &ffmpeg_dst);
+                    let _ = std::fs::copy(dl_lib, &lib_dst);
+                }
+            }
+            // 3. 赋予 755 权限
+            if ffmpeg_dst.exists() {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(mut p) = std::fs::metadata(&ffmpeg_dst).map(|m| m.permissions()) {
+                    p.set_mode(0o755);
+                    let _ = std::fs::set_permissions(&ffmpeg_dst, p);
+                }
+            }
+        }
+
+        if ffmpeg_dst.exists() {
+            return Ok(Some(ffmpeg_dst.to_string_lossy().into_owned()));
         }
         return Ok(None);
     }
 
-    // PC 端逻辑保留
+    // PC端原版逻辑保留
     if let Some(ffmpeg_path) = read_config()?.ffmpeg_path {
         if test_ffmpeg(&ffmpeg_path) { return Ok(Some(ffmpeg_path)); }
     }
@@ -345,8 +361,8 @@ pub fn find_ffmpeg() -> Result<Option<String>> {
     Ok(if test_ffmpeg(&ffmpeg) { Some(ffmpeg.display().to_string()) } else { None })
 }
 
-pub const ENCODER_LIST_HEVC: [&str; 4] = ["hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_vaapi"];
-pub const ENCODER_LIST_AVC: [&str; 4] = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_vaapi"];
+pub const ENCODER_LIST_HEVC: [&str; 5] = ["hevc_mediacodec", "hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_vaapi"];
+pub const ENCODER_LIST_AVC: [&str; 5] = ["h264_mediacodec", "h264_nvenc", "h264_qsv", "h264_amf", "h264_vaapi"];
 
 pub fn get_encoder(
     ffmpeg: &String,
