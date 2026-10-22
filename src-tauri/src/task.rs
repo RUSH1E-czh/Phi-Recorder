@@ -238,6 +238,7 @@ impl Task {
         })
     }
 
+
 pub async fn run(&self) -> Result<()> {
     if self.request_cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Ok(());
@@ -247,6 +248,7 @@ pub async fn run(&self) -> Result<()> {
 
     *self.status.lock().await = TaskStatus::Loading;
 
+    // 启动子进程。API 28 下这是完全合法的。
     let mut child = cmd_hidden(std::env::current_exe()?)
         .arg("render")
         .arg(ASSET_PATH.get().unwrap())
@@ -254,10 +256,12 @@ pub async fn run(&self) -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
+    // 将参数写入子进程的标准输入
     stdin
         .write_all(format!("{}\n", serde_json::to_string(&self.params)?).as_bytes())
         .await?;
@@ -282,6 +286,7 @@ pub async fn run(&self) -> Result<()> {
 
     loop {
         tokio::select! {
+            // 读取 stderr (错误日志)
             stderr_result = stderr_lines.next_line() => {
                 let line = stderr_result?;
                 let Some(line) = line else { break };
@@ -292,6 +297,7 @@ pub async fn run(&self) -> Result<()> {
                 output_stderr.push('\n');
             },
 
+            // 读取 stdout (进度事件)
             stdout_result = stdout_lines.next_line() => {
                 let line = stdout_result?;
                 let Some(line) = line else { break };
@@ -386,6 +392,7 @@ pub async fn run(&self) -> Result<()> {
                 }
             },
 
+            // 监听取消和暂停指令
             _ = async {
                 loop {
                     let cancel = self.request_cancel.load(Ordering::Relaxed);
